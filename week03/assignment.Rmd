@@ -1,0 +1,124 @@
+---
+title: "Week 3 Assignment"
+author: "Anna Chamot"
+date: "2025-03-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(Rsubread)      # read alignment
+  library(rtracklayer)   # read/write genomic file formats
+  library(Biostrings)    # handling sequences
+  library(Rfastp)        # read QC/trimming
+  library(epiwraps)
+})
+ah <- AnnotationHub()
+```
+# Download the Drosophila ChIP-seq for the protein CTCF:
+
+```{r, eval=FALSE}
+# we need to increase the download timeout:
+options(timeout=3600)
+
+dir.create("raw")
+download.file("https://www.encodeproject.org/files/ENCFF127RRR/@@download/ENCFF127RRR.fastq.gz", "raw/ENCFF127RRR.fastq.gz", mode="wb")
+
+```
+# Process it from the raw data to obtain the bam file and the peaks:
+
+## Trimming:
+
+```{r}
+
+dir.create("rfastp.trimmed")
+qc <- Rfastp::rfastp("raw/ENCFF127RRR.fastq.gz", thread=4, overrepresentationAnalysis=TRUE,
+                 outputFastq=file.path("rfastp.trimmed/",gsub("\\.fastq\\.gz$","",basename("raw/ENCFF127RRR.fastq.gz"))))
+
+```
+
+```{r}
+# Quick QC:
+Rfastp::curvePlot(qc, curve="content_curves")
+```
+
+## Alignment
+
+### Building a genome index for mapping
+
+```{r, eval=FALSE}
+# we get the genome sequence from AnnotationHub
+genome <- ah[["AH49674"]]
+# we create a new directory that will contain the genome index
+dir.create("BDGP6_genome")
+# we write the genome sequence in fasta format
+export(import.2bit(genome), "BDGP6_genome/genome.fasta.gz", compress=TRUE)
+# we build a Rsubread index
+Rsubread::buildindex("BDGP6_genome/rsubread", reference="BDGP6_genome/genome.fasta.gz")
+```
+
+### Alignment
+
+```{r}
+dir.create("aligned")
+# readfile1: single end, paired ends readfile1 and readfile2 
+align.stats <- Rsubread::align(index="BDGP6_genome/rsubread", type="dna",
+                               readfile1="rfastp.trimmed/ENCFF127RRR_R1.fastq.gz",
+                               output_file="aligned/ENCFF127RRR.bam",
+                               nthreads=6, sortReadsByCoordinates=TRUE)
+align.stats
+```
+
+The number of mapped reads is: 3 504 769 over 3 816 990 reads which represents 91.8%.
+
+## Peak calling
+
+```{r}
+library(MACSr)
+
+dir.create("peaks")
+callpeak(tfile="aligned/ENCFF127RRR.bam", # do I have to put a control file?? cfile = "aligned/input.bam",
+         gsize="dm", outdir = "peaks", name = "ENCFF127RRR")
+```
+
+
+```{r}
+peaks <- rtracklayer::import("peaks/ENCFF127RRR_peaks.narrowPeak")
+peaks
+print( paste0("The number of peaks found is:", length(peaks)))
+```
+
+
+```{r}
+# Let's try to find a a peak that is located inside a gene
+# First loading the genes from Drosophilia
+query_results <- query(ah, c("Drosophila", "EnsDb"))
+query_results
+ah["AH119285"]
+ensdb <- ah[["AH119285"]]
+ensdb
+genes <- genes(ensdb)
+genes
+```
+
+```{r}
+# Going for the CTCF gene and see if we have some detected peaks that overlap with it
+ctcf <- genes[which(genes$gene_name=="CTCF")]
+ctcf
+overlaps <- findOverlaps(peaks, ctcf)
+overlaps
+peaks[2526]
+```
+```{r}
+# Plot our peak of interest
+head(peaks)
+
+# we're going to put both tracks on the same scale, and add the peaks coordinates:
+plotSignalTracks(list(aligned_reads = "aligned/ENCFF127RRR.bam", peaks = peaks, CTCF = ctcf) , region=peaks[2526],
+                 extend=5000)
+```

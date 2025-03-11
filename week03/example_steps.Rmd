@@ -3,7 +3,6 @@ title: "W3 practical: example ChIPseq processing"
 output: html_document
 ---
 
-
 ```{r}
 suppressPackageStartupMessages({
   library(AnnotationHub)
@@ -21,32 +20,31 @@ We will perform the primary analysis of an example dataset, at each step demonst
 
 # Downloading the raw reads
 
-We download an example dataset which is (a subset of) a ChIP-seq experiment mapping the bindings
-of the factor ttk across the Kc167 Drosophila cell line.
+We download an example dataset which is (a subset of) a ChIP-seq experiment mapping the bindings of the factor ttk across the Kc167 Drosophila cell line.
 
 We download the data:
 
 ```{r, eval=FALSE}
+# Eval = FALSE : dont execute this the next time you run this, prefer to download in the code so you have a record of what you donwloaded and not just go on a website
 # not important in this case, but if downloading large files on a slow connection
 # we need to increase the download timeout:
 options(timeout=3600)
 
 dir.create("raw")
-download.file("https://www.ethz-ins.org/content/ttk.fastq.gz", "ttk.fastq.gz", mode="wb")
-download.file("https://www.ethz-ins.org/content/input.fastq.gz", "input.fastq.gz", mode="wb")
+download.file("https://www.ethz-ins.org/content/ttk.fastq.gz", "raw/ttk.fastq.gz", mode="wb")
+download.file("https://www.ethz-ins.org/content/input.fastq.gz", "raw/input.fastq.gz", mode="wb")
 ```
-
 
 # Reads QC and trimming
 
-## Using fastqc 
+## Using fastqc
 
 For this we will use shell commands:
 
 ```{bash engine.opts='-l', eval=FALSE}
 # note that depending on how your computer/server is set up, you might need to 
-# specify where to find the software, e.g.:
-# export PATH="/opt/miniconda3/bin:$PATH"
+# specify where to find the software, -l is for using local configuration, e.g.:
+export PATH="/opt/miniconda3/bin:$PATH"
 mkdir -p raw_fastqc
 fastqc -o raw_fastqc --threads 4 raw/*.fastq.gz
 ```
@@ -56,7 +54,6 @@ This will create an html report with QC plots for each file. We could optionally
 ```{bash engine.opts='-l', eval=FALSE}
 multiqc -o raw_fastqc raw_fastqc
 ```
-
 
 ### Trimming
 
@@ -72,6 +69,7 @@ trimmomatic SE -threads 4 -summary trimmed/input.stats -phred33 raw/input.fastq.
 ## Using R and Rfastp
 
 ```{r}
+# for each file call the function rfastp
 dir.create("rfastp.trimmed")
 qc <- lapply(c(ttk="raw/ttk.fastq.gz", input="raw/input.fastq.gz"), FUN=function(x){
   Rfastp::rfastp(x, thread=4, overrepresentationAnalysis=TRUE,
@@ -79,15 +77,12 @@ qc <- lapply(c(ttk="raw/ttk.fastq.gz", input="raw/input.fastq.gz"), FUN=function
 })
 ```
 
-This will create an html report with before/after QC plots, as well as a trimmed
-and filtered fastq file. Furthermore, the R output object (equivalent to the .json 
-stats also saved by the program) can be used to generate the QC plots inside a
-markdown, for example:
+This will create an html report with before/after QC plots, as well as a trimmed and filtered fastq file. Furthermore, the R output object (equivalent to the .json stats also saved by the program) can be used to generate the QC plots inside a markdown, for example:
 
 ```{r}
+# you can get the similar metrics as fastqc in the following package, here is an example:
 Rfastp::curvePlot(qc$ttk, curve="content_curves")
 ```
-
 
 # Alignment
 
@@ -105,6 +100,8 @@ bowtie2-build --threads 4 BDGP6_genome/genome.fasta.gz BDGP6_genome/bowtie2
 ### Alignment
 
 ```{bash engine.opts='-l'}
+
+# here -U single end, if paired end , use U1 and U1 kind of
 mkdir -p aligned
 (bowtie2 -p 4 -x BDGP6_genome/bowtie2 -U trimmed/ttk.fastq.gz) 2> aligned/ttk.bowtie2 |\
   samtools view -bS - | samtools sort -@4 -m 2G - > aligned/ttk.bam
@@ -113,7 +110,6 @@ samtools index aligned/ttk.bam
   samtools view -bS - | samtools sort -@4 -m 2G - > aligned/input.bam
 samtools index aligned/input.bam
 ```
-
 
 ## In R using Rsubread
 
@@ -136,17 +132,14 @@ Rsubread::buildindex("BDGP6_genome/rsubread", reference="BDGP6_genome/genome.fas
 
 ```{r}
 dir.create("aligned")
+# readfile1: single end, paired ends readfile1 and readfile2 
 align.stats <- Rsubread::align(index="BDGP6_genome/rsubread", type="dna",
                                readfile1=c("rfastp.trimmed/ttk_R1.fastq.gz", 
                                            "rfastp.trimmed/input_R1.fastq.gz"),
-                               output_file=c("aligned/ttk","aligned/input.bam"),
+                               output_file=c("aligned/ttk.bam","aligned/input.bam"),
                                nthreads=6, sortReadsByCoordinates=TRUE)
 align.stats
 ```
-
-
-
-
 
 # Peak calling
 
@@ -160,22 +153,27 @@ macs3 callpeak --outdir peaks -n ttk --gsize dm -t aligned/ttk.bam -c aligned/in
 
 We can then import the peaks in R:
 
-```{r}
-peaks <- rtracklayer::import("peaks/ttk_peaks.narrowPeak")
-peaks
-```
 
-
+P-value:(-log10pvalues) proba if you would getvthis peak if you signal comes from your input, corrected
+score is the  pvalue scaled from 0 to 1000
+peak: within the range of the peak waht is the highest location
+signalvalue: 4 you have 4 times more reads that what you have in the control.
 Note that MACS can also be called from within R, through the `MACSr` package (which wraps around macs3):
 
 ```{r}
 # install MACSr, if not already done:
 if(!require("MACSr",quietly=TRUE)) BiocManager::install("MACSr")
 
+# /!\ here before an empty peaks directory should be created in ther working folder
 library(MACSr)
 callpeak(tfile="aligned/ttk.bam", cfile = "aligned/input.bam",
          gsize="dm", outdir = "peaks", name = "ttk")
 # (will take a while the first time it's run, as it installs a new environment)
+```
+```{r}
+# run after MACsr in r
+peaks <- rtracklayer::import("peaks/ttk_peaks.narrowPeak")
+peaks
 ```
 
 ## Having a loog at a peak
@@ -190,11 +188,9 @@ plotSignalTracks(list(ttk="aligned/ttk.bam", peaks=peaks, input="aligned/input.b
                  extend=5000, tracks.params=list(ylim=c(0,50)))
 ```
 
-Note that an accumulation of reads at a given locus is not necessarily a binding event, but might also be an artifact.
-This is the main reason for having a input control. For instance, let's have a look at the following region:
+Note that an accumulation of reads at a given locus is not necessarily a binding event, but might also be an artifact. This is the main reason for having a input control. For instance, let's have a look at the following region:
 
 ```{r}
 plotSignalTracks(c(ttk="aligned/ttk.bam", input="aligned/input.bam"), region="2R:342663-342814",
                  tracks.params=list(ylim=c(0,80)))
 ```
-
