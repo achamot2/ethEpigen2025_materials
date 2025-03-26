@@ -1,0 +1,121 @@
+---
+title: "Assignment 5"
+author: "Anna Chamot"
+date: "2025-03-26"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Assignment 5
+
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(ensembldb)
+  library(GenomicRanges)
+  library(epiwraps)
+  library(rtracklayer)
+  library(ggplot2)
+   library(R.utils) # unzip .gz archives
+})
+# we shouldn't actually need this today, but in case:
+# ah <- AnnotationHub(localHub=TRUE)
+# ensdb <- ah[["AH89211"]]
+```
+
+## Using peaks from ENCODE, identify bivalent domains (H3K27me3 + H3K4me3) from (mouse or human) embryonic stem cells (ESC)
+
+
+  * H3K27me3
+  
+```{r}
+dir.create("peaks")
+
+download.file("https://www.encodeproject.org/files/ENCFF008XKX/@@download/ENCFF008XKX.bed.gz", "peaks/H3K27me3.bed.gz") 
+gunzip("peaks/H3K27me3.bed.gz", remove=FALSE)
+
+peaks_H3K27me3 <- rtracklayer::import("peaks/H3K27me3.bed", format="narrowPeak")
+print(length(peaks_H3K27me3))
+head(peaks_H3K27me3)
+``` 
+
+  * H3K4me3
+
+```{r}
+dir.create("peaks")
+
+download.file("https://www.encodeproject.org/files/ENCFF974BMC/@@download/ENCFF974BMC.bed.gz", "peaks/H3K4me3.bed.gz") 
+gunzip("peaks/H3K4me3.bed.gz", remove=FALSE)
+
+peaks_H3K4me3 <- rtracklayer::import("peaks/H3K4me3.bed", format="narrowPeak")
+print(length(peaks_H3K4me3))
+head(peaks_H3K4me3)
+``` 
+
+```{r}
+# Find the overlapping peaks 
+hits <- findOverlaps(peaks_H3K27me3, peaks_H3K4me3)
+# Find the genomic regions of the overlapping peaks
+bivalent_domains <- pintersect(
+  peaks_H3K27me3[queryHits(hits)],
+  peaks_H3K4me3[subjectHits(hits)]
+)
+print(length(hits))
+head(bivalent_domains)
+```
+
+## Question: what happens to those regions upon differentiation?
+
+### Choose one differentiated cell type (e.g. erythroblasts, fibroblast, B cells, etc.)
+
+### Download the H3K27me3 and H3K4me3 peaks from this cell type
+
+  * H3K27me3
+  
+```{r}
+dir.create("peaks")
+
+download.file("https://www.encodeproject.org/files/ENCFF728FZO/@@download/ENCFF728FZO.bed.gz", "peaks/H3K27me3_erythroblasts.bed.gz") 
+gunzip("peaks/H3K27me3_erythroblasts.bed.gz", remove=FALSE)
+
+peaks_H3K27me3_erythroblasts <- rtracklayer::import("peaks/H3K27me3_erythroblasts.bed", format="narrowPeak")
+print(length(peaks_H3K27me3_erythroblasts))
+head(peaks_H3K27me3_erythroblasts)
+``` 
+
+  * H3K4me3
+
+```{r}
+dir.create("peaks")
+
+download.file("https://www.encodeproject.org/files/ENCFF339CXH/@@download/ENCFF339CXH.bed.gz", "peaks/H3K4me3_erythroblasts.bed.gz") 
+gunzip("peaks/H3K4me3_erythroblasts.bed.gz", remove=FALSE)
+
+peaks_H3K4me3_erythroblasts <- rtracklayer::import("peaks/H3K4me3_erythroblasts.bed", format="narrowPeak")
+print(length(peaks_H3K4me3_erythroblasts))
+head(peaks_H3K4me3_erythroblasts)
+``` 
+
+
+### How many of the mESC bivalent domains are, in this differentiated cell type, overlapping either mark or their combination (in this differentiated cell type)?
+
+
+```{r}
+# Overlap of bivalent domains with H3K27me3 in erythroblasts
+overlap_H3K27me3 <- queryHits(findOverlaps(bivalent_domains, peaks_H3K27me3_erythroblasts))
+length(unique(overlap_H3K27me3))  # Number of unique bivalent domains retaining H3K27me3
+
+# Overlap of bivalent domains with H3K4me3 in erythroblasts
+overlap_H3K4me3 <- queryHits(findOverlaps(bivalent_domains, peaks_H3K4me3_erythroblasts))
+length(unique(overlap_H3K4me3))  # Number of unique bivalent domains retaining H3K4me3
+
+# Still bivalent in erythroblasts
+bivalent_erythroblasts <- intersect(overlap_H3K27me3, overlap_H3K4me3)
+length(bivalent_erythroblasts)
+
+```
+
