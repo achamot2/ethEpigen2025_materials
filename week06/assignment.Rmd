@@ -1,0 +1,185 @@
+---
+title: "Assignment 6"
+author: "Anna Chamot"
+date: "2025-04-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Assignment 6
+
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(GenomicRanges)
+  library(ggplot2)
+  #library(memes) # for the meme-based methods -- COMMENT OUT when using alternatives
+  library(motifmatchr) # for scanning sequences for matches of given motifs
+  library(Biostrings) # for handling sequences
+  library(MotifDb) # database of motifs # not up to date anymore
+  library(TFBSTools) # for handling some motif formats
+  library(universalmotif) # for converting motifs to various formats
+  library(PWMEnrich) # for R-based motif enrichment analysis
+})
+```
+
+## Choose a transcription factor, e.g. CREB1, REST, GATA5, EGR1, GCR (or any of your choice that has a motif and available ChIPseq data)
+## Download the (e.g. Mouse) peaks for that factor (in whatever cell type)
+
+GATA1 ChIP-seq on mouse MEL produced by the Snyder lab
+
+```{r}
+download.file("https://www.encodeproject.org/files/ENCFF024CYR/@@download/ENCFF024CYR.bed.gz", "mouse_GATA1.bed.gz")
+peaks <- rtracklayer::import("mouse_GATA1.bed.gz", format="NarrowPeak")
+seqlevelsStyle(peaks) <- "Ensembl"  
+# Subset the peaks that are on chrmosome one to make it faster 
+peaks_chr1 <- peaks[seqnames(peaks)=="1"] 
+```
+## Identify the instances of the factor's motif
+
+```{r}
+# Search for "GATA1" in the motif database
+motifs <- query(MotifDb, "GATA1")
+names(motifs)
+```
+
+```{r}
+# No motif is available from a mouse source, hoping that the motif is conserved we can go for th human motif
+motif <- motifs[["Mmusculus-jaspar2018-Gata1-MA0035.1"]]
+motif
+
+# we visualize it:
+view_motifs(motifs[20:24])
+view_motifs(motif)
+```
+
+## Answer the following questions:
+
+### Of all the peaks, what proportion contains a motif for the factor?
+```{r}
+ah <- AnnotationHub()
+genome <- ah[["AH68356"]] # need to have the sequence because for the peaks we have the ranges and to know which base then with have to have the ref...
+# we'll load it into memory:
+genome_seqs <- Biostrings::readDNAStringSet("genome.fa")
+
+```
+
+```{r}
+motif2 <- convert_motifs(motif, class="TFBSTools-PWMatrix")
+moi <- motifmatchr::matchMotifs(motif2, subject=peaks_chr1, genome=Rsamtools::FaFile("genome.fa"),
+                                out="positions") # specify that we want the 
+moi <- moi[[1]] # we scanned for just one motif, so we get the results for that 
+head(moi)
+hist(moi$score)
+```
+
+
+```{r}
+# how many of the peaks have a motif?
+print(length)
+table(overlapsAny(peaks_chr1, moi))
+# how many of my motifs matches overlap my peaks 
+table(overlapsAny(moi, peaks_chr1)) # here everything bc we just looked inside the peaks
+overlaps <- overlapsAny(peaks_chr1, moi)
+n_overlap <- sum(overlaps)
+total <- length(peaks_chr1)
+percent <- round(100 * n_overlap / total, 2)
+
+message <- paste("Of the", total, 
+                 "peaks of chromosome 1,", 
+                 n_overlap, "(", percent, "%) contain a motif")
+
+print(message)
+```
+
+### Of all instances of that motif in the genome (or in one chromosome), what proportion is bound by the factor (i.e. has a peak)?
+
+```{r}
+genome_chr1 <- genome_seqs[names(genome_seqs) == "1"]
+# Motif scan
+moi_raw <- matchMotifs(motif2,
+                       subject = genome_chr1,
+                       genome = Rsamtools::FaFile("genome.fa"),
+                       out = "positions")
+
+# Flatten the result
+moi_ir <- unlist(moi_raw)
+
+# Check the class
+class(moi_ir)  # should say "IRanges" or "IRangesList"
+
+# Step 4: Check what's inside
+head(moi_ir)         # see if there are start/end/score/strand
+# Step 1: Get the actual IRanges object inside the nested list
+moi_ir <- moi_raw[[1]][[1]]  # first [[1]] gets the IRangesList, second [[1]] 
+class(moi_ir)  # "IRanges"
+
+# Convert to GRanges
+moi_gr <- GRanges(
+  seqnames = Rle("1"),  
+  ranges = moi_ir,
+  strand = mcols(moi_ir)$strand,
+  score = mcols(moi_ir)$score
+)
+
+head(moi_gr)
+hist(moi_gr$score)
+```
+
+```{r}
+# how many of my motifs matches overlap my peaks 
+table(overlapsAny(moi_gr, peaks_chr1))
+
+
+overlaps <- overlapsAny(moi_gr, peaks_chr1)
+n_overlap <- sum(overlaps)
+total <- length(moi_gr)
+percent <- round(100 * n_overlap / total, 2)
+
+message <- paste("Of the", total, 
+                 "motif instances in chromosome 1,", 
+                 n_overlap, "(", percent, "%) overlap a peak")
+
+print(message)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
