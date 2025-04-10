@@ -1,0 +1,218 @@
+---
+title: "assignment"
+author: "Anna Chamot"
+date: '2025-04-10'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Assignment 7
+
+```{r}
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(AnnotationHub)
+  library(MotifDb)
+  library(memes)
+  library(universalmotif)
+  library(ensembldb)
+  library(ggplot2)
+})
+
+ah <- AnnotationHub(localHub=FALSE)
+ensdb <- ah[["AH89211"]] # mouse ensembldb object
+```
+## Download the data
+
+You can either start from the bam file:
+
+```{r, eval=FALSE}
+download.file("https://ethz-ins.org/content/w7/atac.chr19.bam", "atac.chr19.bam")
+download.file("https://ethz-ins.org/content/w7/atac.chr19.bam.bai", "atac.chr19.bam.bai")
+```
+## Preparing tracks
+
+```{r}
+bam <- "atac.chr19.bam"
+
+# create a track using all fragments, computing the coverage at each position (and force Ensembl naming)
+epiwraps::bam2bw(bam, output_bw = "full_cov.bw", paired=TRUE, binWidth=10L, forceSeqlevelsStyle = "Ensembl")
+
+# create a track using all fragments, but computing the number of cuts/insertion sites at each position
+bam2bw(bam, output_bw = "full_cuts.bw", paired=TRUE, binWidth=1L, type="ends", 
+                 trim=4L, extend=3L, forceSeqlevelsStyle = "Ensembl")
+
+# create a track using only nucleosome-free fragments, computing coverage
+bam2bw(bam, output_bw = "NF_cov.bw", paired=TRUE, binWidth=5L, minFragLength=30, 
+       maxFragLength=120, forceSeqlevelsStyle = "Ensembl")
+
+# create a track using only nucleosome-free fragments, the number of cuts/insertion sites at each position
+bam2bw(bam, output_bw = "NF_cuts.bw", paired=TRUE, binWidth=1L, type="ends", minFragLength=30, 
+       maxFragLength=120, trim=4L, extend=3L, forceSeqlevelsStyle = "Ensembl")
+
+# create a track using only mono-nucleosome fragments, computing coverage
+bam2bw(bam, output_bw = "mono_cov.bw", paired=TRUE, binWidth=10L, minFragLength=140,
+       maxFragLength=220, forceSeqlevelsStyle = "Ensembl")
+
+# create a track using only the (10bp) centers of mono-nucleosome fragments
+bam2bw(bam, output_bw = "mono_centers.bw", paired=TRUE, binWidth=5L, minFragLength=140, trim=4L,
+       maxFragLength=220, type="center", extend=10L, forceSeqlevelsStyle = "Ensembl")
+```
+## Around the high-confidence motifs of two factors (for instance use KLF4 and MAZ)
+
+## Obtaining the sites with a KLF4 motif
+```{r}
+# explore KLF4 motif
+query(MotifDb, c("KLF4","Mus"))
+```
+```{r}
+ah["AH68356"]
+```
+
+
+```{r}
+# get KLF4 motif
+motif_KLF4 <- MotifDb::query(MotifDb, c("KLF4","Mus"))[[1]]
+motif2_KLF4 <- convert_motifs(motif_KLF4, class="TFBSTools-PFMatrix")
+genome <- ah[["AH68356"]]
+# get the sequence for chr19:
+chr19 <- import(genome)["19"]
+
+# find motif matches across chr19,  p.cutoff=1e-5 for high confidence motifs?
+motifmatchr::matchMotifs(motif2_KLF4, chr19, out="positions",p.cutoff=1e-5)
+```
+```{r}
+moi_KLF4 <- motifmatchr::matchMotifs(motif2_KLF4, chr19, out="positions", p.cutoff=1e-5)[[1]]
+
+# Flatten the CompressedIRangesList to a single IRanges object
+flat_ranges <- unlist(moi_KLF4)
+
+# Extract the 'score' metadata column
+scores <- mcols(flat_ranges)$score
+
+# Plot histogram
+hist(scores,
+     main = "Histogram of Scores",
+     xlab = "Score",
+     col = "skyblue",
+     border = "white")
+```
+
+```{r}
+
+# convert to GRanges
+moi_KLF4 <- as(setNames(moi_KLF4,names(chr19)), "GRanges")
+moi_KLF4
+```
+## Obtaining the sites with a MAZ motif
+```{r}
+# explore MAZ motif
+query(MotifDb, c("MAZ","Mus"))
+```
+
+
+```{r}
+# get MAZ motif
+motif_MAZ <- MotifDb::query(MotifDb, c("MAZ","Mus"))[[1]]
+motif2_MAZ <- convert_motifs(motif_MAZ, class="TFBSTools-PFMatrix")
+
+# find motif matches across chr19,  p.cutoff=1e-5 for high confidence motifs?
+motifmatchr::matchMotifs(motif2_MAZ, chr19, out="positions",p.cutoff=1e-5)
+```
+
+```{r}
+# p.cutoff=1e-7 to reduce number of regions to plot after (causing issues)
+moi_MAZ <- motifmatchr::matchMotifs(motif2_MAZ, chr19, out="positions", p.cutoff=1e-7)[[1]]
+
+# Flatten the CompressedIRangesList to a single IRanges object
+flat_ranges <- unlist(moi_MAZ)
+
+# Extract the 'score' metadata column
+scores <- mcols(flat_ranges)$score
+
+# Plot histogram
+hist(scores,
+     main = "Histogram of Scores",
+     xlab = "Score",
+     col = "skyblue",
+     border = "white")
+```
+
+```{r}
+
+# convert to GRanges
+moi_MAZ <- as(setNames(moi_MAZ,names(chr19)), "GRanges")
+moi_MAZ
+```
+
+
+
+### plot 1) the insertion (i.e. ‘cuts’) profile of nucleosome-free fragments and 2) the centers of nucleosome-containing fragments,
+
+** KLF4 **
+
+```{r, fig.width=8, fig.height=4}
+# we prepare the list of tracks
+tracks <- c("NF_cuts.bw", "mono_centers.bw")
+names(tracks) <- gsub("\\.bw","",basename(tracks))
+
+# extract signals around the motif occurences
+# we zoom in to 300bp around the motif centers, in windows of 5bp
+sm_KLF4 <- signal2Matrix(tracks, moi_KLF4, w=5, extend=300)
+
+# plot the signals:
+plotEnrichedHeatmaps(sm_KLF4, trim=0.95, multiScale = TRUE, axis_name = "0")
+```
+```{r}
+
+d <- meltSignals(sm_KLF4, trim=0.95)
+head(d)
+ggplot(d, aes(position, mean, colour=sample)) + geom_line(size=1.2)
+```
+
+
+** MAZ **
+
+```{r, fig.width=8, fig.height=4}
+# extract signals around the motif occurences
+# we zoom in to 300bp around the motif centers, in windows of 5bp
+sm_MAZ <- signal2Matrix(tracks, moi_MAZ, w=5, extend=300)
+
+# plot the signals:
+plotEnrichedHeatmaps(sm_MAZ, trim=0.95, multiScale = TRUE, axis_name = "0")
+```
+
+```{r}
+
+d <- meltSignals(sm_MAZ, trim=0.95)
+head(d)
+ggplot(d, aes(position, mean, colour=sample)) + geom_line(size=1.2)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
