@@ -67,11 +67,12 @@ names(bwfiles) <- gsub("\\.bw","",basename(bwfiles))
 
 sm <- signal2Matrix(bwfiles, regions=peaks$p300, w=50)
 # we could plot them all on separate scales:
-plotEnrichedHeatmaps(sm, trim = 0.95)
+plotEnrichedHeatmaps(sm, trim = 0.95, multiScale = TRUE, axis_name = "0", colors=list()
 # when doing that it can also help to use different colors, e.g.:
-plotEnrichedHeatmaps(sm, trim = 0.95, multiScale = TRUE, axis_name = "0", 
-                     colors=list("darkred","yellow","black","darkgreen","darkblue",
-                                 viridisLite::inferno(100)))
+#plotEnrichedHeatmaps(sm, trim = 0.95, multiScale = TRUE, axis_name = "0")
+#, 
+       #              colors=list("darkred","yellow","black","darkgreen","darkblue",
+       #                          viridisLite::inferno(100)))
 ```
 
 We can also try a quick approximative normalization method, to put everything on a comparable scale:

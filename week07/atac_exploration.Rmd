@@ -16,7 +16,7 @@ suppressPackageStartupMessages({
   library(ggplot2)
 })
 
-ah <- AnnotationHub(localHub=TRUE)
+ah <- AnnotationHub(localHub=FALSE)
 ensdb <- ah[["AH89211"]] # mouse ensembldb object
 ```
 
@@ -104,9 +104,27 @@ plotEnrichedHeatmaps(sm, trim=0.95, multiScale = TRUE, axis_name = "0")
 We could use our standard functions:
 
 ```{r}
+files <- list.files(pattern = "bw$")
+sm <- signal2Matrix(files, moi, extend = 300, w=5L)
+plotEnrichedHeatmaps(sm, trim=0.95, multiScale = TRUE)
+# on the left: same as for chip seq how many reads are overlapping each location on the geneome , increase in coverage aroufn CTCF motif, at certain read, a motif matchs is bound only for only a fractions of the motifs, second from left we see TF avoid trqnsposase to insert, high residency time for ctcf so clear footprint, few or so that leave a foot print really visible by atac seq for those who do really important and nice imfromation, also when looking at mononucleosome fragments on both sides (cov) also clear when looking at mono nu centers, whereever CTCF binds there will be always mononucleosomes one each side at same pdistance, well positioned nuccleosomes, thats why on second from left little drop on each side: where there are the nucleosomes we can visu diferent biological stuff happening but ctcf is particular, not all the factors show these same nice info
+```
+```{r}
+sm <- renormalizeSignalMatrices(sm, method = "top")
+plotEnrichedHeatmaps(sm[,2:3])
+d <- meltSignals(sm[,2:3], trim=0.95)
+head(d)
+ggplot(d, aes(position, mean, colour=sample)) + geom_line(size=1.2)
+# interesting for comparing different samples conpare how signal is he same accross different samples
+```
+
+
+```{r}
 d <- meltSignals(sm[,c("NF_cuts", "mono_centers")])
 ggplot(d, aes(position, mean, colour=sample)) + geom_line(size=1.2)
 ```
+
+
 
 Or we could use a specialized function from the ATACseqQC package:
 
@@ -126,4 +144,7 @@ txs <- txs[seqnames(txs)=="19"]
 tss <- reduce(promoters(txs, upstream=0, downstream=1))
 tss.sm <- epiwraps::signal2Matrix(tracks, granges(tss), w=10, extend=1000)
 epiwraps::plotEnrichedHeatmaps(tss.sm, trim=0.95, colors=c("white","darkred"), multiScale=TRUE, axis_name="TSS")
+# in general a enrichment at the tss, half of TSS accessible and half not accessible, TSS at the bottom probably in chromatin domain unlikely to be activated even with stimuli, NF_cov: depletion of nucleosome free reads after the tss having a binding site after tss is repressive, promoters upstream of the tss roughfly 200 bp upstream tss available in active context
+# mononucleosome also asymetric most likely because theese are enriche by TF upstream not really only one nucleosome on theese
+# the peak after TSS: mononucleosome after the tss
 ```
