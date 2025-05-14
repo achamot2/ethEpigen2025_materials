@@ -1,0 +1,212 @@
+---
+title: "Assigment w8"
+author: "Anna Chamot"
+date: '2025-05-06'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(epiwraps)
+  library(motifmatchr)
+  library(MotifDb)
+  library(universalmotif)
+  library(ggplot2)
+  library(SummarizedExperiment) # data structure
+  library(sechm) # for plotting heatmaps from a SummrizedExperiment
+  library(BiocParallel) # for multithreading
+  library(chromVAR) # for motif accessibility estimation
+  library(limma) # for statistical analysis
+  library(Rsamtools) # to get bams files from the .rds
+})
+
+# to control multithreading, unix users can use:
+register(MulticoreParam(4))
+# for windows users, rather one of the following:
+# register(SerialParam()) # this will disable multi-threading
+# register(SnowParam(2))
+```
+
+## Download ATAC-seq peak counts in the hippocampus upon stress (subset of the original data, already in SummarizedExperiment format) :
+
+```{r, eval=FALSE}
+options(timeout=6000)
+download.file("https://ethz-ins.org/content/mouse_mm38_hippocampus.peakCounts.SE.rds", "mouse_mm38_hippocampus.peakCounts.SE.rds", mode="wb")
+```
+```{r}
+se <- readRDS("mouse_mm38_hippocampus.peakCounts.SE.rds")
+bams <- colnames(se)
+names(bams) <- sub("\\.bam$", "", bams)
+bams
+```
+```{r}
+head(assay(se)) 
+```
+```{r}
+colData(se)$condition_group <- gsub("_.+", "", colnames(se))
+colData(se)$condition_sex <- sub("^[^_]+_([^_]+)_.*", "\\1", colnames(se))
+# this would do the same:
+
+row.names(se) <- as.character(granges(se))
+
+# fetch an assay, all equivalent in this case:
+head(assay(se)) # if I want the first
+head(assays(se)$counts)
+head(assay(se, "counts"))
+rowRanges(se)
+```
+```{r}
+library(BSgenome.Mmusculus.UCSC.mm10)
+genome <- BSgenome.Mmusculus.UCSC.mm10
+```
+
+```{r}
+# 1. Définir les chromosomes standards
+#standard_chroms <- c(as.character(1:19), "X", "Y", "MT")
+
+# 2. Filtrer uniquement ces chromosomes dans se
+#se <- keepSeqlevels(se, intersect(standard_chroms, seqlevels(se)), pruning.mode = "coarse")
+se <- keepStandardChromosomes(se, pruning.mode="coarse")
+
+
+# 3. Renommer
+seqlevels(se) <- ifelse(seqlevels(se) %in% as.character(1:19),
+                        paste0("chr", seqlevels(se)),
+                        ifelse(seqlevels(se) == "X", "chrX",
+                               ifelse(seqlevels(se) == "Y", "chrY",
+                                      ifelse(seqlevels(se) == "MT", "chrM", seqlevels(se)))))
+
+# 4. Chwc
+cat("New seqlevels:\n")
+print(seqlevels(se))
+```
+
+
+We had the GC concentration in each peak:
+
+```{r}
+se <- chromVAR::addGCBias(se, genome=genome)
+rowData(se)
+hist(rowData(se)$bias)
+```
+
+## Get the database of motifs
+
+```{r}
+
+mdata <- values(MotifDb)
+head(mdata)
+mouse_motifs <- subset(MotifDb, organism == "Mmusculus" & dataSource == "HOCOMOCOv10")
+# convert to a format motifmatchr can use, and use the gene symbols as names
+# Convert
+motifs_tfbs <- convert_motifs(mouse_motifs, class = "TFBSTools-PWMatrix")
+
+# Prepare gene symbols (safe fallback)
+gene_symbols <- mcols(mouse_motifs)$geneSymbol
+gene_symbols[is.na(gene_symbols)] <- mcols(mouse_motifs)$providerName[is.na(gene_symbols)]
+gene_symbols <- make.unique(gene_symbols)
+library(TFBSTools)
+# Wrap as named PWMatrixList
+motifs <- do.call(PWMatrixList, setNames(motifs_tfbs, gene_symbols))
+# Check
+motifs
+names(motifs)
+```
+
+```{r}
+# we find which peaks contain which motifs
+# we don't use `out="positions"` here the output will be save does a peak contain motif x or not, not the ranges where it matches
+moi <- motifmatchr::matchMotifs(motifs, subject=se, genome=genome)
+head(assay(moi))
+
+# ensure reproducibility
+set.seed(1234)
+# for each peak, we identify similar peaks as background
+bg <- chromVAR::getBackgroundPeaks(se, niterations=500)
+# for each motif, we computed per-sample deviations relative to the background
+dev <- chromVAR::computeDeviations(object = se, annotations=moi,
+                                   background_peaks=bg)
+# bar= there is a match in this motif (col) in this region (row)
+```
+```{r}
+dev
+# 400 rowa, 4 samples (4 columns), two assay deviation and z-score
+# chromVa : relative chromatibn accessibility, how much a sample deviates from the mean across samples and z-score scale by variation of the background
+# z-score not reall a good proxi for mignitude though
+```
+
+```{r}
+head(assay(dev, "z"))
+```
+
+
+
+```{r}
+dev$condition_group
+# if needed, we can specify the baseline condition, by default it's the first in alphabetical order
+dev$condition_group <- factor(dev$condition_group)
+dev$condition_group <- relevel(dev$condition_group, "Control")
+# model matrix
+mm <- model.matrix(~dev$condition_group)
+head(mm)
+# equivalent, but with names that are cleaner:
+mm <- model.matrix(~condition_group, data=as.data.frame(colData(dev)))
+```
+```{r}
+# only need to do one the fit, then ask several questions by doing different test
+fit <- limma::eBayes(limma::lmFit(object = assays(dev)$z, design = mm))
+# we select, from the columns of model.matrix `mm`, the coefficient we want to test:
+res <- as.data.frame(limma::topTable(fit, coef="condition_groupFSS", number = Inf))
+head(res)
+```
+
+
+```{r}
+res$TF <- row.names(res)
+ggplot(res, aes(logFC, -log10(adj.P.Val), label=TF)) + geom_text()
+# as out question is now biased, what is different, but the link that makes the TF corresponds to a motifs is not always one tot one so here our analysis is biased because we dont know from which TF that difference comes from could be any that has this motif for bindinf, even on that was not annotated but has the same motif
+#universalmotif::view_motifs(motifs[c("GCR","PRGR")])
+```
+
+```{r}
+metadata(dev)$anno_colors <- list(condition=c(CTRL="lightgrey", DEX="darkred"))
+sechm::sechm(dev, features = row.names(res)[1:5], assayName="z", top_annotation = c("condition_group", "depth"))
+```
+```{r}
+dev$condition_sex
+# if needed, we can specify the baseline condition, by default it's the first in alphabetical order
+dev$condition_sex <- factor(dev$condition_sex)
+dev$condition_sex <- relevel(dev$condition_sex, "male")
+# model matrix
+mm <- model.matrix(~dev$condition_sex)
+head(mm)
+# equivalent, but with names that are cleaner:
+mm <- model.matrix(~condition_sex, data=as.data.frame(colData(dev)))
+```
+```{r}
+# only need to do one the fit, then ask several questions by doing different test
+fit <- limma::eBayes(limma::lmFit(object = assays(dev)$z, design = mm))
+# we select, from the columns of model.matrix `mm`, the coefficient we want to test:
+res <- as.data.frame(limma::topTable(fit, coef="condition_sexfemale", number = Inf))
+head(res)
+```
+
+
+```{r}
+res$TF <- row.names(res)
+ggplot(res, aes(logFC, -log10(adj.P.Val), label=TF)) + geom_text()
+# as out question is now biased, what is different, but the link that makes the TF corresponds to a motifs is not always one tot one so here our analysis is biased because we dont know from which TF that difference comes from could be any that has this motif for bindinf, even on that was not annotated but has the same motif
+#universalmotif::view_motifs(motifs[c("GCR","PRGR")])
+```
+
+```{r}
+metadata(dev)$anno_colors <- list(condition=c(CTRL="lightgrey", DEX="darkred"))
+sechm::sechm(dev, features = row.names(res)[1:5], assayName="z", top_annotation = c("condition_sex", "depth"))
+```
+
+
