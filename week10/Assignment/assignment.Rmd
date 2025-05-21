@@ -1,0 +1,185 @@
+---
+title: "assignment"
+author: "Anna Chamot"
+date: '2025-05-14'
+output: html_document
+---
+
+
+```{r}
+suppressPackageStartupMessages({
+  library(GenomicRanges)
+  library(epiwraps)
+  library(ggplot2)
+  library(rGREAT) # Gene Ontology enrichment among genomic regions
+})
+```
+
+## Download and decompress the archive: 
+
+```{r, eval=FALSE}
+options(timeout = 6000)
+download.file("https://ethz-ins.org/content/w10.assignment.zip", "w10.assignment.zip")
+unzip("w10.assignment.zip")
+list.files()
+```
+
+
+## Prepare the regions and the tracks
+
+```{r}
+tracks <- list.files(pattern="bw$")
+regions_creb1 <- rtracklayer::import.bed("Creb1.bed")
+regions_creb3 <- rtracklayer::import.bed("Creb3.bed")
+regions_creb3L1 <- rtracklayer::import.bed("Creb3L1.bed")
+regions <- c(regions_creb1, regions_creb3, regions_creb3L1)
+```
+*Tip*
+
+*To get a clearer picture, focus on high-confidence peaks from each factor to define the universe of regions, e.g.:*
+
+```{r}
+peaks <- list.files(pattern="bed$")
+# we first import the peaks
+peaks <- lapply(peaks, rtracklayer::import.bed)
+# we'll focus on the high-quality peaks
+peaks <- lapply(peaks, FUN=function(x) x[x$score>800])
+# we get the union of non-redundant regions
+regions_hc <- reduce(unlist(GRangesList(peaks)))
+```
+
+## Use clustering and visualization to illustrate the relationship between the binding of the different proteins
+
+### Unbiaised overview
+
+```{r}
+# plot all the regions and have an unbiaised overview of what the data looks like
+ese <- signal2Matrix(tracks, regions, extend=2000)
+ese_hc <- signal2Matrix(tracks, regions_hc, extend=2000)
+plotEnrichedHeatmaps(ese)
+plotEnrichedHeatmaps(ese_hc)
+```
+
+```{r}
+# plot with hierachical clustering
+plotEnrichedHeatmaps(ese_hc, cluster_rows = TRUE, show_row_dend=TRUE)
+```
+
+## Clustering
+
+```{r}
+cl2 <- clusterSignalMatrices(ese_hc, k=2:10)
+ggplot(cl2$varExplained, aes(k, varExplained)) + geom_line()
+# we can try to get higher variance explained by clustering, exist other metrxi also (like separability) not trivial to chose, most important be in a reasonable range
+```
+
+```{r}
+set.seed(123)  # to ensure that it gives the same results everytime
+cl <- clusterSignalMatrices(ese_hc, k=5) # explicit number of clusters (but its still a complicated problem, based on judgment)
+table(cl)
+head(cl)
+length(cl)
+length(regions_hc)
+
+# to make sure the cluster labels stay associated with the corresponding regions/rows
+# even if we manipulate the object, put them inside the rowData of the object:
+rowData(ese_hc)$cluster <- cl
+head(rowData(ese_hc))
+```
+```{r}
+mycolors <- c("1"="red", "2"="blue", "3"="darkgreen", "4"="black", "5"="orange")
+plotEnrichedHeatmaps(ese_hc, row_split=rowData(ese_hc)$cluster, mean_color=mycolors, colors=c("white","darkred"))
+# a lot of the clustering is based on the genreal enrichment in the region, we will correct that, like remember some regions have also signal in the input we can do how high is each signal relative to the other signals
+# in cluster 2 it looks that we could have more clusters
+```
+Plotting just the averages:
+
+```{r}
+d <- meltSignals(ese_hc, splitBy=cl)
+ggplot(d, aes(position, mean, colour=sample)) + geom_line(size=1.2) + facet_wrap(~split)
+```
+Clustering using relative signal instead:
+
+```{r}
+set.seed(123)  
+# scale signal across eahc row, so between them, and then use the clustering we used before
+cl <- clusterSignalMatrices(ese_hc, k=5, scaleRows = TRUE)# makes the results mroe stable, nstart=10)
+d <- meltSignals(ese_hc, splitBy=cl)
+ggplot(d, aes(position, mean, colour=sample)) + geom_line() + facet_wrap(~split)
+plotEnrichedHeatmaps(ese_hc, row_split = cl, scale_rows = "global", mean_color=mycolors)
+
+```
+
+## Enrichment analysis
+
+Find what's enriched in one cluster with respect to the others:
+
+```{r}
+library(rGREAT)
+
+# Split regions by cluster
+split_regions <- split(rowRanges(ese_hc), rowData(ese_hc)$cluster)
+lengths(split_regions)
+
+# Submit GREAT job for cluster 1, with hg38 and custom background
+job <- submitGreatJob(split_regions[["1"]], species = "hg38")
+
+# Check available categories (optional but good to check)
+availableCategories(job)
+
+# Get enrichment tables
+tb <- getEnrichmentTables(job)
+
+# Extract GO:BP enrichment results
+bp <- tb[["GO Biological Process"]]
+
+# View top enriched GO terms
+head(bp)
+```
+
+```{r}
+
+# we first split the regions by cluster:
+#library('rGREAT')
+#split_regions <- split(rowRanges(ese_hc), rowData(ese_hc)$cluster)
+#lengths(split_regions)
+
+# background very important, not take the full genome bc if you do an experiment in brain cells for instance all the clusters will have enriochment in vbrain related stuff but depends what you want to compare, probably you want to know if the is a enrichment of some regions in one cluster comapreed to the other clusters that show enrichment in one go
+#res <- great(split_regions[["1"]], gene_sets="GO:BP", tss_source="hg38", 
+ #            background=regions_hc, cores=2)
+#bp <- getEnrichmentTables(res)
+#head(bp)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
